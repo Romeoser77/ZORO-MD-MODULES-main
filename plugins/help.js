@@ -189,6 +189,7 @@ async function helpCommand(sock, chatId, message) {
 ‎╰────────────────◇
 ‎
 ‎╭▣ 🔒 ${transformText('OWNER COMMANDS')} ▣
+‎│➽ .${transformText('update')}
 ‎│➽ .${transformText('mode')}
 ‎│➽ .${transformText('clearsession')}
 ‎│➽ .${transformText('setprefix')}
