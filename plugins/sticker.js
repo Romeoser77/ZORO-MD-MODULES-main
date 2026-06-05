@@ -5,6 +5,44 @@ const path = require('path');
 const settings = require('../settings');
 const webp = require('node-webpmux');
 const crypto = require('crypto');
+const axios = require('axios');
+const FormData = require('form-data');
+
+// --- 18+ Filter Function ---
+async function isAdultContent(buffer) {
+    try {
+        let data = new FormData();
+        // Set buffer as a file
+        data.append('media', buffer, 'media.jpg');
+        data.append('models', 'nudity-2.0');
+        
+        // Enter your API keys below!
+        data.append('api_user', 'YOUR_API_USER_HERE'); 
+        data.append('api_secret', 'YOUR_API_SECRET_HERE');
+
+        let response = await axios({
+            method: 'post',
+            url: 'https://api.sightengine.com/1.0/check.json',
+            data: data,
+            headers: data.getHeaders()
+        });
+
+        if (response.data.status === 'success') {
+            const safeScore = response.data.nudity.none;
+            // If safeScore is less than 50%, there is a high chance of it being 18+
+            if (safeScore < 0.5) {
+                return true; // It is 18+
+            }
+        }
+        return false; // It is safe
+    } catch (error) {
+        console.error('NSFW API Error:', error.message);
+        // If an error occurs during checking (e.g., API timeout), 
+        // we return false to avoid blocking the bot.
+        return false; 
+    }
+}
+// --------------------------
 
 async function stickerCommand(sock, chatId, message) {
     // The message that will be quoted in the reply.
@@ -15,7 +53,6 @@ async function stickerCommand(sock, chatId, message) {
 
     // If the message is a reply, the target media is in the quoted message.
     if (message.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
-        // We need to build a new message object for downloadMediaMessage to work correctly.
         const quotedInfo = message.message.extendedTextMessage.contextInfo;
         targetMessage = {
             key: {
@@ -32,7 +69,7 @@ async function stickerCommand(sock, chatId, message) {
     if (!mediaMessage) {
         await sock.sendMessage(chatId, { 
             text: 'Please reply to an image/video with .sticker, or send an image/video with .sticker as the caption.',
-            },{ quoted: messageToQuote });
+        },{ quoted: messageToQuote });
         return;
     }
 
@@ -48,6 +85,19 @@ async function stickerCommand(sock, chatId, message) {
                 });
             return;
         }
+
+        // ---- Safety Check ----
+        await sock.sendMessage(chatId, { text: '🔍 Checking media for safety...' }, { quoted: messageToQuote });
+        
+        const is18Plus = await isAdultContent(mediaBuffer);
+        
+        if (is18Plus) {
+            await sock.sendMessage(chatId, { 
+                text: '❌ *Sorry!* The bot does not allow creating stickers from 18+ content. This restriction is for the safety of the bot and the users.' 
+            }, { quoted: messageToQuote });
+            return; // Stop process if 18+
+        }
+        // ----------------------
 
         // Create temp directory if it doesn't exist
         const tmpDir = path.join(process.cwd(), 'tmp');
@@ -67,7 +117,7 @@ async function stickerCommand(sock, chatId, message) {
                           mediaMessage.mimetype?.includes('video') || 
                           mediaMessage.seconds > 0;
 
-        // Convert to WebP using ffmpeg with optimized settings for animated/non-animated
+        // Convert to WebP using ffmpeg with optimized settings
         const ffmpegCommand = isAnimated
             ? `ffmpeg -i "${tempInput}" -vf "scale=512:512:force_original_aspect_ratio=decrease,fps=15,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=#00000000" -c:v libwebp -preset default -loop 0 -vsync 0 -pix_fmt yuva420p -quality 75 -compression_level 6 "${tempOutput}"`
             : `ffmpeg -i "${tempInput}" -vf "scale=512:512:force_original_aspect_ratio=decrease,format=rgba,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=#00000000" -c:v libwebp -preset default -loop 0 -vsync 0 -pix_fmt yuva420p -quality 75 -compression_level 6 "${tempOutput}"`;
@@ -84,33 +134,10 @@ async function stickerCommand(sock, chatId, message) {
         // Read the WebP file
         let webpBuffer = fs.readFileSync(tempOutput);
 
-        // If animated and output is too large, re-encode with harsher settings similar to stickercrop
+        // If animated and output is too large, re-encode with harsher settings
         if (isAnimated && webpBuffer.length > 1000 * 1024) {
             try {
                 const tempOutput2 = path.join(tmpDir, `sticker_fallback_${Date.now()}.webp`);
-                // Detect large source to decide compression level
-                const fileSizeKB = mediaBuffer.length / 1024;
-                const isLargeFile = fileSizeKB > 5000; // 5MB
-                const fallbackCmd = isLargeFile
-                    ? `ffmpeg -y -i "${tempInput}" -t 2 -vf "scale=512:512:force_original_aspect_ratio=decrease,fps=8,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=#00000000" -c:v libwebp -preset default -loop 0 -vsync 0 -pix_fmt yuva420p -quality 30 -compression_level 6 -b:v 100k -max_muxing_queue_size 1024 "${tempOutput2}"`
-                    : `ffmpeg -y -i "${tempInput}" -t 3 -vf "scale=512:512:force_original_aspect_ratio=decrease,fps=12,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=#00000000" -c:v libwebp -preset default -loop 0 -vsync 0 -pix_fmt yuva420p -quality 45 -compression_level 6 -b:v 150k -max_muxing_queue_size 1024 "${tempOutput2}"`;
-                await new Promise((resolve, reject) => {
-                    exec(fallbackCmd, (error) => error ? reject(error) : resolve());
-                });
-                if (fs.existsSync(tempOutput2)) {
-                    webpBuffer = fs.readFileSync(tempOutput2);
-                    try { fs.unlinkSync(tempOutput2); } catch {}
-                }
-            } catch {}
-        }
-        // Read the WebP file
-        webpBuffer = fs.readFileSync(tempOutput);
-
-        // If animated and output is too large, re-encode with harsher settings similar to stickercrop
-        if (isAnimated && webpBuffer.length > 1000 * 1024) {
-            try {
-                const tempOutput2 = path.join(tmpDir, `sticker_fallback_${Date.now()}.webp`);
-                // Detect large source to decide compression level
                 const fileSizeKB = mediaBuffer.length / 1024;
                 const isLargeFile = fileSizeKB > 5000; // 5MB
                 const fallbackCmd = isLargeFile
