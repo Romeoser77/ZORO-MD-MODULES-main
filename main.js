@@ -1128,7 +1128,7 @@ case userMessage.startsWith('.spotify'):
     await spotifyCommand(sock, chatId, message);
     break;
 
-// 🔥 ഈ കമാൻഡുകൾ ഏത് അടിച്ചാലും പാട്ട് ഡൗൺലോഡ് കമാൻഡ് വർക്ക് ചെയ്യും (Flat Fall-through method)
+// 🔥 All these commands will trigger the song download function (Flat fall-through method)
 case userMessage.startsWith('.play'):
 case userMessage.startsWith('.mp3'):
 case userMessage.startsWith('.ytmp3'):
